@@ -2,3 +2,11 @@ requests
 beautifulsoup4
 pandas
 paperscraper
+pdfplumber
+camelot-py
+pytesseract
+Pillow
+langchain
+langchain-core
+python-dotenv
+qdrant-client

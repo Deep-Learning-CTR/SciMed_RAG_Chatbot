@@ -22,7 +22,7 @@ def download_papers(results, output_dir='processing/downloaded_papers'):
         # Construct a filename safe from special characters
         title = paper.get('title', f'paper_{idx}')
         safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in title)
-        filepath = os.path.join(output_dir, f"{safe_title}.pdf")
+        filepath = os.path.join(output_dir, f"{doi}.pdf")
 
         try:
             save_pdf({"doi": doi}, filepath=filepath)
