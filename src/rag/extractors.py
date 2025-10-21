@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import pdfplumber
 import camelot
@@ -183,17 +184,44 @@ def extract_text_from_excel(excel_path):
     return documents
 
 
-def extract_text_from_multiple_files(file_paths):
-    """Extract text from multiple PDF and Excel files (NO VISION MODEL)"""
+def _extract_single_file(file_path):
+    """Dispatch extraction based on file extension."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".pdf":
+        return extract_text_from_pdf_simple(file_path)
+    if ext in [".xlsx", ".xls"]:
+        return extract_text_from_excel(file_path)
+    print(f"Unsupported file type: {file_path}")
+    return []
+
+
+def extract_text_from_multiple_files(file_paths, max_workers=None):
+    """Extract text from multiple PDF and Excel files (NO VISION MODEL) concurrently per file."""
+    if not file_paths:
+        return []
+
+    worker_count = max_workers if max_workers is not None else min(8, len(file_paths))
+    worker_count = max(1, worker_count)
+    gathered = {idx: [] for idx in range(len(file_paths))}
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_idx = {}
+        for idx, file_path in enumerate(file_paths):
+            future = executor.submit(_extract_single_file, file_path)
+            future_to_idx[future] = (idx, file_path)
+
+        for future in as_completed(future_to_idx):
+            idx, file_path = future_to_idx[future]
+            try:
+                gathered[idx] = future.result()
+            except Exception as exc:
+                print(f"Failed to extract {file_path}: {exc}")
+                gathered[idx] = []
+
     all_documents = []
-    for file_path in file_paths:
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext == ".pdf":
-            all_documents.extend(extract_text_from_pdf_simple(file_path))
-        elif ext in [".xlsx", ".xls"]:
-            all_documents.extend(extract_text_from_excel(file_path))
-        else:
-            print(f"⚠️  Unsupported file type: {file_path}")
+    for idx in range(len(file_paths)):
+        all_documents.extend(gathered[idx])
+
     return all_documents
 
 

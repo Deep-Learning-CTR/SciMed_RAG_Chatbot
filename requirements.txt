@@ -8,5 +8,8 @@ pytesseract
 Pillow
 langchain
 langchain-core
+langchain-community
 python-dotenv
 qdrant-client
+sentence-transformers
+langchain-qdrant

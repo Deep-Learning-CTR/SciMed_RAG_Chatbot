@@ -1,10 +1,14 @@
 # file: rag_embedding_pipeline.py
 
 import os
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Optional
+
+import requests
+from langchain_core.embeddings import Embeddings
+from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.http import models
-from langchain_community.vectorstores import Qdrant
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from qdrant_client.http.models import Distance, VectorParams
 from rag.extractors import extract_text_from_multiple_files, split_chunk_overlap  # your earlier code
 
 # ---------------- CONFIG ----------------
@@ -16,6 +20,24 @@ COLLECTION_NAME = "papers_rag"
 # Local Qdrant DB path (change if you want persistent storage)
 QDRANT_DB_PATH = "processing/qdrant_local_db"  # folder will be created
 # ---------------------------------------
+_client: Optional[QdrantClient] = None
+
+
+def get_qdrant_client() -> QdrantClient:
+    """Lazily create a singleton Qdrant client tied to the local storage path."""
+    global _client
+    if _client is None:
+        _client = QdrantClient(path=QDRANT_DB_PATH)
+    return _client
+
+
+def reset_qdrant_client() -> None:
+    """Close and clear the cached Qdrant client so a fresh instance can be created."""
+    global _client
+    if _client is not None:
+        _client.close()
+        _client = None
+
 
 def get_all_files(directory=DATA_DIR):
     """Recursively collect PDF and Excel files"""
@@ -37,25 +59,115 @@ def add_metadata_to_documents(documents, metadata_list):
     return documents
 
 
+class OllamaEmbeddings(Embeddings):
+    """Minimal LangChain-compatible embedding wrapper around an Ollama server."""
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:11434",
+        model: str = "toshk0/nomic-embed-text-v2-moe:Q6_K",
+        max_workers: Optional[int] = 10,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.max_workers = max_workers
+        self._dimension: Optional[int] = None
+
+    def _embed(self, text: str) -> List[float]:
+        response = requests.post(
+            f"{self.base_url}/api/embeddings",
+            json={"model": self.model, "input": text},
+            timeout=60,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if "embedding" not in payload:
+            raise ValueError(f"Ollama embeddings response missing 'embedding' key: {payload}")
+        return payload["embedding"]
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+
+        worker_count = self.max_workers if self.max_workers is not None else min(4, len(texts))
+        worker_count = max(1, worker_count)
+        if worker_count == 1:
+            return [self._embed(text) for text in texts]
+
+        # Requests are IO-bound; a modest worker pool improves throughput without overwhelming Ollama.
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            return list(executor.map(self._embed, texts))
+
+    def embed_query(self, text: str) -> List[float]:
+        return self._embed(text)
+
+    def vector_size(self) -> int:
+        """Infer the embedding dimensionality once so downstream stores can be configured."""
+        if self._dimension is None:
+            sample_vector = self._embed("dimension probe")
+            self._dimension = len(sample_vector)
+        return self._dimension
+
+
+def ensure_qdrant_collection(collection_name: str, vector_size: int):
+    """
+    Create the collection if missing, otherwise verify that the existing size matches the embedder.
+    """
+    client = get_qdrant_client()
+    try:
+        info = client.get_collection(collection_name)
+    except Exception:
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+        )
+        return
+
+    # Qdrant may return either a dict or an object for vector params depending on client version.
+    existing_vectors = getattr(getattr(getattr(info, "config", None), "params", None), "vectors", None)
+    if existing_vectors is None and isinstance(getattr(info, "config", None), dict):
+        existing_vectors = info["config"].get("params", {}).get("vectors")
+
+    existing_size = None
+    if isinstance(existing_vectors, dict):
+        existing_size = existing_vectors.get("size")
+    else:
+        existing_size = getattr(existing_vectors, "size", None)
+
+    if existing_size is not None and existing_size != vector_size:
+        raise ValueError(
+            f"Collection '{collection_name}' exists with vector size {existing_size}, "
+            f"but the embedding model returns size {vector_size}. Delete or recreate the collection."
+        )
+
+
 def embed_and_store(documents, collection_name=COLLECTION_NAME, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
     """
-    Create embeddings using nomic-embed-text-v2-moe and store in Qdrant (serverless)
+    Create embeddings using a locally hosted Ollama model and store in an on-disk Qdrant collection.
     """
-    embeddings = HuggingFaceEmbeddings(model_name="nomic-ai/nomic-embed-text-v2-moe")
+    embeddings = OllamaEmbeddings()
     
     # Split into chunks
     chunked_docs = split_chunk_overlap(documents, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+
+    if not chunked_docs:
+        print("No document chunks produced; skipping Qdrant ingestion.")
+        return
     
-    # Store in Qdrant (serverless / local)
-    Qdrant.from_documents(
-        documents=chunked_docs,
-        embedding=embeddings,
+    vector_size = embeddings.vector_size()
+    ensure_qdrant_collection(collection_name, vector_size)
+
+    client = get_qdrant_client()
+    vector_store = QdrantVectorStore(
+        client=client,
         collection_name=collection_name,
-        prefer_grpc=False,
-        location=QDRANT_DB_PATH  # path on disk for local DB
+        embedding=embeddings,
     )
-    
-    print(f"✅ Stored {len(chunked_docs)} chunks in local Qdrant collection '{collection_name}'.")
+
+    # Store in a local Qdrant collection (persists to disk under QDRANT_DB_PATH)
+    vector_store.add_documents(chunked_docs)
+
+    print(f"Stored {len(chunked_docs)} chunks in local Qdrant collection '{collection_name}'.")
 
 
 def extract_and_embed(metadata_list, data_dir=DATA_DIR, collection_name=COLLECTION_NAME):
