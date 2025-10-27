@@ -16,14 +16,31 @@ CHUNK_OVERLAP = 200
 # ---------------------------------------
 
 
-def get_all_files(directory=DATA_DIR):
+def get_all_files(directory=DATA_DIR,conversation_id=None):
     """Recursively collect PDF and Excel files"""
     file_paths = []
-    for root, dirs, files in os.walk(directory):
-        for file in files:
-            if file.lower().endswith((".pdf", ".xlsx", ".xls")):
-                file_paths.append(os.path.join(root, file))
-    return file_paths
+    if not conversation_id:
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                if file.lower().endswith((".pdf", ".xlsx", ".xls")):
+                    file_paths.append(os.path.join(root, file))
+        return file_paths
+    else:
+        tracking_file = os.path.join('processing', f"{conversation_id}")
+        if not os.path.exists(tracking_file):
+            print(f"No tracking file found for conversation ID: {conversation_id}")
+            return []
+        with open(tracking_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split(":")
+                if len(parts) == 2:
+                    filename = parts[1]
+                    filepath = os.path.join(directory, filename)
+                    if os.path.exists(filepath):
+                        file_paths.append(filepath)
+                    else:
+                        print(f"File listed in tracking not found: {filepath}")
+        return file_paths
 
 
 def _sanitize_identifier(raw: Optional[str]) -> Optional[str]:
@@ -140,6 +157,25 @@ def extract_and_embed(metadata_list, data_dir=DATA_DIR, collection_name=COLLECTI
     """Full pipeline: extract text, attach metadata, embed, store locally"""
     print(f"[1/4] Getting all files from {data_dir}...")
     file_paths = get_all_files(data_dir)
+    print(f"      Found {len(file_paths)} files")
+    
+    print(f"[2/4] Extracting text from files...")
+    all_docs = extract_text_from_multiple_files(file_paths)
+    print(f"      Extracted {len(all_docs)} document pages")
+    
+    print(f"[3/4] Adding metadata...")
+    all_docs = add_metadata_to_documents(all_docs, metadata_list)
+    print(f"      Metadata added to {len(all_docs)} documents")
+    
+    print(f"[4/4] Embedding and storing in Qdrant...")
+    embed_and_store(all_docs, collection_name=collection_name)
+    
+    return all_docs
+
+def extract_and_embed_conversation(metadata_list, data_dir=DATA_DIR, collection_name=COLLECTION_NAME, conversation_id=None):
+    """Full pipeline: extract text, attach metadata, embed, store locally for a specific conversation"""
+    print(f"[1/4] Getting all files from {data_dir} for conversation {conversation_id}...")
+    file_paths = get_all_files(data_dir, conversation_id=conversation_id)
     print(f"      Found {len(file_paths)} files")
     
     print(f"[2/4] Extracting text from files...")

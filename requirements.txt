@@ -13,3 +13,4 @@ python-dotenv
 qdrant-client
 sentence-transformers
 langchain-qdrant
+cerebras_cloud_sdk
