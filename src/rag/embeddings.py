@@ -6,8 +6,8 @@ from typing import List, Optional
 
 import requests
 from langchain_core.embeddings import Embeddings
-from rag.extractors import extract_text_from_multiple_files, split_chunk_overlap  # your earlier code
-from rag.vector_db import store_documents_in_qdrant, get_collection_name  # Import vector DB functions
+from extractors import extract_text_from_multiple_files, split_chunk_overlap  # your earlier code
+from vector_db import store_documents_in_qdrant, get_collection_name  # Import vector DB functions
 
 # ---------------- CONFIG ----------------
 DATA_DIR = "processing/downloaded_papers"

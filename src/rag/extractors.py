@@ -194,31 +194,20 @@ def _extract_single_file(file_path):
 
 
 def extract_text_from_multiple_files(file_paths, max_workers=None):
-    """Extract text from multiple PDF and Excel files (NO VISION MODEL) concurrently per file."""
+    """Extract text from multiple PDF and Excel files (NO VISION MODEL) sequentially to prevent crashes."""
     if not file_paths:
         return []
 
-    worker_count = max_workers if max_workers is not None else min(8, len(file_paths))
-    worker_count = max(1, worker_count)
-    gathered = {idx: [] for idx in range(len(file_paths))}
-
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_idx = {}
-        for idx, file_path in enumerate(file_paths):
-            future = executor.submit(_extract_single_file, file_path)
-            future_to_idx[future] = (idx, file_path)
-
-        for future in as_completed(future_to_idx):
-            idx, file_path = future_to_idx[future]
-            try:
-                gathered[idx] = future.result()
-            except Exception as exc:
-                print(f"Failed to extract {file_path}: {exc}")
-                gathered[idx] = []
-
     all_documents = []
-    for idx in range(len(file_paths)):
-        all_documents.extend(gathered[idx])
+    
+    # Process files sequentially (no threading to prevent memory issues)
+    for idx, file_path in enumerate(file_paths, 1):
+        try:
+            print(f"      [{idx}/{len(file_paths)}] Processing: {os.path.basename(file_path)}")
+            docs = _extract_single_file(file_path)
+            all_documents.extend(docs)
+        except Exception as exc:
+            print(f"      [{idx}/{len(file_paths)}] Failed to extract {os.path.basename(file_path)}: {exc}")
 
     return all_documents
 
