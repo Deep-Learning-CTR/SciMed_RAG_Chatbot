@@ -35,9 +35,14 @@ DEFAULT_MAX_RESULTS = 10
 DEFAULT_RETRIEVAL_K = 4
 SYSTEM_PROMPT = (
     "You are a research assistant specialising in scientific and medical literature. "
-    "Use the supplied sources to answer the user's question. "
-    "Cite supporting evidence inline using [Source #] notation. "
-    "If the sources do not contain sufficient information, say so frankly."
+    "Use the supplied sources to answer the user's question clearly and concisely. "
+    "Cite supporting evidence inline using clickable links in the format "
+    "[Source 1](https://doi.org/DOI_HERE) — replacing DOI_HERE with the actual DOI from the metadata. "
+    "For arXiv or medRxiv papers, use their corresponding DOI URLs (e.g., https://doi.org/10.48550/arXiv.2309.00252 for arXiv or https://doi.org/10.1101/2025.08.12.25333155 for medRxiv). "
+    "If the sources do not contain sufficient information to answer the question, say so frankly. "
+    "At the end of the response, include a 'References' section listing all sources in this format: "
+    "[Source 1](https://doi.org/DOI_HERE) — filename.pdf | page X | DOI DOI_HERE. "
+    "Ensure that every [Source #] in the text is a clickable DOI link."
 )
 
 
@@ -258,9 +263,14 @@ def run_chat_flow(model_name: str, retrieval_k: int) -> None:
 
     embeddings = get_query_embeddings()
     try:
-        vector_store = get_vector_store(embeddings, collection_name=st.session_state.collection_name)
-        with st.spinner("Retrieving relevant chunks..."):
-            raw_chunks = vector_store.similarity_search_with_score(user_prompt, k=retrieval_k)
+        vector_store, client = get_vector_store(
+            embeddings, collection_name=st.session_state.collection_name
+        )
+        try:
+            with st.spinner("Retrieving relevant chunks..."):
+                raw_chunks = vector_store.similarity_search_with_score(user_prompt, k=retrieval_k)
+        finally:
+            client.close()  # ✅ always close after use
     except Exception as exc:
         st.error(f"Retrieval failed: {exc}")
         return

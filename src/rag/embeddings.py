@@ -6,8 +6,8 @@ from typing import List, Optional
 
 import requests
 from langchain_core.embeddings import Embeddings
-from extractors import extract_text_from_multiple_files, split_chunk_overlap  # your earlier code
-from vector_db import store_documents_in_qdrant, get_collection_name  # Import vector DB functions
+from rag.extractors import extract_text_from_multiple_files, split_chunk_overlap  # your earlier code
+from rag.vector_db import store_documents_in_qdrant, get_collection_name  # Import vector DB functions
 
 # ---------------- CONFIG ----------------
 DATA_DIR = "processing/downloaded_papers"
@@ -32,7 +32,7 @@ def get_all_files(directory=DATA_DIR,conversation_id=None):
             return []
         with open(tracking_file, 'r', encoding='utf-8') as f:
             for line in f:
-                parts = line.strip().split(":")
+                parts = line.strip().rsplit(":", 1)  # only split on the first colon
                 if len(parts) == 2:
                     filename = parts[1]
                     filepath = os.path.join(directory, filename)
