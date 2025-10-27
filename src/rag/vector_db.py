@@ -7,7 +7,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 
 # ---------------- CONFIG ----------------
-COLLECTION_NAME = "papers_rag"
+# Default collection name; can be overridden at runtime via set_collection_name().
+_COLLECTION_NAME = "papers_rag"
 QDRANT_DB_PATH = "processing/qdrant_local_db"  # folder will be created
 # ---------------------------------------
 
@@ -28,6 +29,27 @@ def reset_qdrant_client() -> None:
     if _client is not None:
         _client.close()
         _client = None
+
+
+def set_collection_name(name: str) -> None:
+    """Set the default Qdrant collection name to use for this run."""
+    global _COLLECTION_NAME
+    _COLLECTION_NAME = name
+
+
+def get_collection_name() -> str:
+    """Get the currently configured default collection name."""
+    return _COLLECTION_NAME
+
+
+def __getattr__(name: str):
+    """
+    Backward compatibility for code importing COLLECTION_NAME as a constant.
+    Returns the current default collection name dynamically.
+    """
+    if name == "COLLECTION_NAME":
+        return get_collection_name()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def ensure_qdrant_collection(collection_name: str, vector_size: int) -> QdrantClient:
@@ -67,7 +89,7 @@ def ensure_qdrant_collection(collection_name: str, vector_size: int) -> QdrantCl
 def store_documents_in_qdrant(
     documents: List,
     embeddings: Embeddings,
-    collection_name: str = COLLECTION_NAME,
+    collection_name: Optional[str] = None,
 ) -> None:
     """
     Store documents in a local Qdrant collection.
@@ -81,6 +103,10 @@ def store_documents_in_qdrant(
         print("No document chunks provided; skipping Qdrant ingestion.")
         return
     
+    # Resolve collection name
+    if not collection_name:
+        collection_name = get_collection_name()
+
     # Get vector size from embeddings
     vector_size = embeddings.vector_size() if hasattr(embeddings, 'vector_size') else None
     if vector_size is None:
@@ -106,7 +132,7 @@ def store_documents_in_qdrant(
 
 def get_vector_store(
     embeddings: Embeddings,
-    collection_name: str = COLLECTION_NAME,
+    collection_name: Optional[str] = None,
 ) -> QdrantVectorStore:
     """
     Get a QdrantVectorStore instance for querying.
@@ -120,6 +146,10 @@ def get_vector_store(
     """
     client = get_qdrant_client()
     
+    # Resolve collection name
+    if not collection_name:
+        collection_name = get_collection_name()
+
     return QdrantVectorStore(
         client=client,
         collection_name=collection_name,

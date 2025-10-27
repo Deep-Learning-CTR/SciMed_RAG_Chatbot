@@ -7,7 +7,7 @@ from typing import List, Optional
 import requests
 from langchain_core.embeddings import Embeddings
 from rag.extractors import extract_text_from_multiple_files, split_chunk_overlap  # your earlier code
-from rag.vector_db import store_documents_in_qdrant, COLLECTION_NAME  # Import vector DB functions
+from rag.vector_db import store_documents_in_qdrant, get_collection_name  # Import vector DB functions
 
 # ---------------- CONFIG ----------------
 DATA_DIR = "processing/downloaded_papers"
@@ -136,7 +136,7 @@ class OllamaEmbeddings(Embeddings):
         return self._dimension
 
 
-def embed_and_store(documents, collection_name=COLLECTION_NAME, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
+def embed_and_store(documents, collection_name=None, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
     """
     Create embeddings using a locally hosted Ollama model and store in an on-disk Qdrant collection.
     """
@@ -150,10 +150,12 @@ def embed_and_store(documents, collection_name=COLLECTION_NAME, chunk_size=CHUNK
         return
     
     # Use the vector_db module to store documents
+    if collection_name is None:
+        collection_name = get_collection_name()
     store_documents_in_qdrant(chunked_docs, embeddings, collection_name)
 
 
-def extract_and_embed(metadata_list, data_dir=DATA_DIR, collection_name=COLLECTION_NAME):
+def extract_and_embed(metadata_list, data_dir=DATA_DIR, collection_name=None):
     """Full pipeline: extract text, attach metadata, embed, store locally"""
     print(f"[1/4] Getting all files from {data_dir}...")
     file_paths = get_all_files(data_dir)
@@ -172,7 +174,7 @@ def extract_and_embed(metadata_list, data_dir=DATA_DIR, collection_name=COLLECTI
     
     return all_docs
 
-def extract_and_embed_conversation(metadata_list, data_dir=DATA_DIR, collection_name=COLLECTION_NAME, conversation_id=None):
+def extract_and_embed_conversation(metadata_list, data_dir=DATA_DIR, collection_name=None, conversation_id=None):
     """Full pipeline: extract text, attach metadata, embed, store locally for a specific conversation"""
     print(f"[1/4] Getting all files from {data_dir} for conversation {conversation_id}...")
     file_paths = get_all_files(data_dir, conversation_id=conversation_id)
@@ -187,6 +189,8 @@ def extract_and_embed_conversation(metadata_list, data_dir=DATA_DIR, collection_
     print(f"      Metadata added to {len(all_docs)} documents")
     
     print(f"[4/4] Embedding and storing in Qdrant...")
+    if collection_name is None:
+        collection_name = get_collection_name()
     embed_and_store(all_docs, collection_name=collection_name)
     
     return all_docs
