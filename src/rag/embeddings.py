@@ -76,14 +76,21 @@ class OllamaEmbeddings(Embeddings):
     def _embed(self, text: str) -> List[float]:
         response = requests.post(
             f"{self.base_url}/api/embeddings",
-            json={"model": self.model, "input": text},
+            json={"model": self.model, "prompt": text},  # Changed 'input' to 'prompt'
             timeout=60,
         )
         response.raise_for_status()
         payload = response.json()
+        
+        # Debug: print response if embedding is missing or empty
         if "embedding" not in payload:
             raise ValueError(f"Ollama embeddings response missing 'embedding' key: {payload}")
-        return payload["embedding"]
+        
+        embedding = payload["embedding"]
+        if not embedding or len(embedding) == 0:
+            raise ValueError(f"Ollama returned empty embedding. Response: {payload}")
+            
+        return embedding
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         if not texts:
@@ -109,19 +116,23 @@ class OllamaEmbeddings(Embeddings):
         return self._dimension
 
 
-def ensure_qdrant_collection(collection_name: str, vector_size: int):
+def ensure_qdrant_collection(collection_name: str, vector_size: int) -> QdrantClient:
     """
     Create the collection if missing, otherwise verify that the existing size matches the embedder.
+    If size mismatch, delete and recreate the collection.
+    Returns the QdrantClient (fresh instance if collection was recreated).
     """
     client = get_qdrant_client()
     try:
         info = client.get_collection(collection_name)
     except Exception:
+        # Collection doesn't exist, create it
         client.create_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
         )
-        return
+        print(f"✅ Created new collection '{collection_name}' with vector size {vector_size}")
+        return client
 
     # Qdrant may return either a dict or an object for vector params depending on client version.
     existing_vectors = getattr(getattr(getattr(info, "config", None), "params", None), "vectors", None)
@@ -135,10 +146,27 @@ def ensure_qdrant_collection(collection_name: str, vector_size: int):
         existing_size = getattr(existing_vectors, "size", None)
 
     if existing_size is not None and existing_size != vector_size:
-        raise ValueError(
-            f"Collection '{collection_name}' exists with vector size {existing_size}, "
-            f"but the embedding model returns size {vector_size}. Delete or recreate the collection."
+        print(f"⚠️  Collection '{collection_name}' exists with vector size {existing_size}, "
+              f"but embedding model returns size {vector_size}.")
+        print(f"🗑️  Deleting old collection and recreating with correct size...")
+        
+        # Delete the old collection
+        client.delete_collection(collection_name)
+        
+        # CRITICAL: Reset the client to clear cached collection info
+        reset_qdrant_client()
+        client = get_qdrant_client()
+        
+        # Create new collection with correct size
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
         )
+        print(f"✅ Recreated collection '{collection_name}' with vector size {vector_size}")
+        return client
+    else:
+        print(f"✅ Collection '{collection_name}' already exists with correct vector size {vector_size}")
+        return client
 
 
 def embed_and_store(documents, collection_name=COLLECTION_NAME, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
@@ -155,11 +183,10 @@ def embed_and_store(documents, collection_name=COLLECTION_NAME, chunk_size=CHUNK
         return
     
     vector_size = embeddings.vector_size()
-    ensure_qdrant_collection(collection_name, vector_size)
+    client = ensure_qdrant_collection(collection_name, vector_size)  # Get fresh client
 
-    client = get_qdrant_client()
     vector_store = QdrantVectorStore(
-        client=client,
+        client=client,  # Use the client returned from ensure_qdrant_collection
         collection_name=collection_name,
         embedding=embeddings,
     )
@@ -172,8 +199,19 @@ def embed_and_store(documents, collection_name=COLLECTION_NAME, chunk_size=CHUNK
 
 def extract_and_embed(metadata_list, data_dir=DATA_DIR, collection_name=COLLECTION_NAME):
     """Full pipeline: extract text, attach metadata, embed, store locally"""
+    print(f"[1/4] Getting all files from {data_dir}...")
     file_paths = get_all_files(data_dir)
+    print(f"      Found {len(file_paths)} files")
+    
+    print(f"[2/4] Extracting text from files...")
     all_docs = extract_text_from_multiple_files(file_paths)
+    print(f"      Extracted {len(all_docs)} document pages")
+    
+    print(f"[3/4] Adding metadata...")
     all_docs = add_metadata_to_documents(all_docs, metadata_list)
+    print(f"      Metadata added to {len(all_docs)} documents")
+    
+    print(f"[4/4] Embedding and storing in Qdrant...")
     embed_and_store(all_docs, collection_name=collection_name)
+    
     return all_docs

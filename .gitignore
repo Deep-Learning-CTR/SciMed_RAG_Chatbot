@@ -8,3 +8,4 @@ __pycache__/
 .github/instructions/codacy.instructions.md
 .github/instructions/codacy.instructions.md
 .github/instructions/codacy.instructions.md
+.codacy/cli.sh
