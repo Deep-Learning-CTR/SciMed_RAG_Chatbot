@@ -6,37 +6,14 @@ from typing import List, Optional
 
 import requests
 from langchain_core.embeddings import Embeddings
-from langchain_qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
 from rag.extractors import extract_text_from_multiple_files, split_chunk_overlap  # your earlier code
+from rag.vector_db import store_documents_in_qdrant, COLLECTION_NAME  # Import vector DB functions
 
 # ---------------- CONFIG ----------------
 DATA_DIR = "processing/downloaded_papers"
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
-COLLECTION_NAME = "papers_rag"
-
-# Local Qdrant DB path (change if you want persistent storage)
-QDRANT_DB_PATH = "processing/qdrant_local_db"  # folder will be created
 # ---------------------------------------
-_client: Optional[QdrantClient] = None
-
-
-def get_qdrant_client() -> QdrantClient:
-    """Lazily create a singleton Qdrant client tied to the local storage path."""
-    global _client
-    if _client is None:
-        _client = QdrantClient(path=QDRANT_DB_PATH)
-    return _client
-
-
-def reset_qdrant_client() -> None:
-    """Close and clear the cached Qdrant client so a fresh instance can be created."""
-    global _client
-    if _client is not None:
-        _client.close()
-        _client = None
 
 
 def get_all_files(directory=DATA_DIR):
@@ -49,13 +26,39 @@ def get_all_files(directory=DATA_DIR):
     return file_paths
 
 
+def _sanitize_identifier(raw: Optional[str]) -> Optional[str]:
+    """Sanitize identifiers exactly like the downloader does to keep filenames in sync."""
+    if not raw:
+        return None
+    safe = "".join(c if c.isalnum() or c in "._- " else "_" for c in raw)
+    return safe.strip() or None
+
+
 def add_metadata_to_documents(documents, metadata_list):
-    """Attach extra metadata from a list of dicts to LangChain Document objects"""
-    metadata_dict = {os.path.basename(item.get("title", "")).lower(): item for item in metadata_list}
+    """Attach useful metadata (doi/pdf link) based on the naming convention used for downloads."""
+    lookup = {}
+    for item in metadata_list or []:
+        for key in ("doi", "pdf_url", "pdf_link"):
+            identifier = _sanitize_identifier(item.get(key))
+            if not identifier:
+                continue
+            lookup.setdefault(identifier.lower(), item)
+
     for doc in documents:
-        filename = os.path.basename(doc.metadata.get("filename", "")).lower()
-        if filename in metadata_dict:
-            doc.metadata.update(metadata_dict[filename])
+        filename = os.path.basename(doc.metadata.get("filename", ""))
+        base_name, _ = os.path.splitext(filename)
+        meta = lookup.get(base_name.lower())
+        if not meta:
+            continue
+
+        doi = meta.get("doi")
+        pdf_url = meta.get("pdf_url") or meta.get("pdf_link")
+
+        if doi:
+            doc.metadata["doi"] = doi
+        if pdf_url:
+            doc.metadata["pdf_link"] = pdf_url
+
     return documents
 
 
@@ -116,59 +119,6 @@ class OllamaEmbeddings(Embeddings):
         return self._dimension
 
 
-def ensure_qdrant_collection(collection_name: str, vector_size: int) -> QdrantClient:
-    """
-    Create the collection if missing, otherwise verify that the existing size matches the embedder.
-    If size mismatch, delete and recreate the collection.
-    Returns the QdrantClient (fresh instance if collection was recreated).
-    """
-    client = get_qdrant_client()
-    try:
-        info = client.get_collection(collection_name)
-    except Exception:
-        # Collection doesn't exist, create it
-        client.create_collection(
-            collection_name=collection_name,
-            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-        )
-        print(f"✅ Created new collection '{collection_name}' with vector size {vector_size}")
-        return client
-
-    # Qdrant may return either a dict or an object for vector params depending on client version.
-    existing_vectors = getattr(getattr(getattr(info, "config", None), "params", None), "vectors", None)
-    if existing_vectors is None and isinstance(getattr(info, "config", None), dict):
-        existing_vectors = info["config"].get("params", {}).get("vectors")
-
-    existing_size = None
-    if isinstance(existing_vectors, dict):
-        existing_size = existing_vectors.get("size")
-    else:
-        existing_size = getattr(existing_vectors, "size", None)
-
-    if existing_size is not None and existing_size != vector_size:
-        print(f"⚠️  Collection '{collection_name}' exists with vector size {existing_size}, "
-              f"but embedding model returns size {vector_size}.")
-        print(f"🗑️  Deleting old collection and recreating with correct size...")
-        
-        # Delete the old collection
-        client.delete_collection(collection_name)
-        
-        # CRITICAL: Reset the client to clear cached collection info
-        reset_qdrant_client()
-        client = get_qdrant_client()
-        
-        # Create new collection with correct size
-        client.create_collection(
-            collection_name=collection_name,
-            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-        )
-        print(f"✅ Recreated collection '{collection_name}' with vector size {vector_size}")
-        return client
-    else:
-        print(f"✅ Collection '{collection_name}' already exists with correct vector size {vector_size}")
-        return client
-
-
 def embed_and_store(documents, collection_name=COLLECTION_NAME, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
     """
     Create embeddings using a locally hosted Ollama model and store in an on-disk Qdrant collection.
@@ -182,19 +132,8 @@ def embed_and_store(documents, collection_name=COLLECTION_NAME, chunk_size=CHUNK
         print("No document chunks produced; skipping Qdrant ingestion.")
         return
     
-    vector_size = embeddings.vector_size()
-    client = ensure_qdrant_collection(collection_name, vector_size)  # Get fresh client
-
-    vector_store = QdrantVectorStore(
-        client=client,  # Use the client returned from ensure_qdrant_collection
-        collection_name=collection_name,
-        embedding=embeddings,
-    )
-
-    # Store in a local Qdrant collection (persists to disk under QDRANT_DB_PATH)
-    vector_store.add_documents(chunked_docs)
-
-    print(f"Stored {len(chunked_docs)} chunks in local Qdrant collection '{collection_name}'.")
+    # Use the vector_db module to store documents
+    store_documents_in_qdrant(chunked_docs, embeddings, collection_name)
 
 
 def extract_and_embed(metadata_list, data_dir=DATA_DIR, collection_name=COLLECTION_NAME):

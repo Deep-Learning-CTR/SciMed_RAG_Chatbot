@@ -16,6 +16,7 @@ from qdrant_client.models import ScoredPoint
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.rag.embeddings import OllamaEmbeddings
+from src.rag.vector_db import COLLECTION_NAME, QDRANT_DB_PATH
 
 
 class VectorDBTester:
@@ -23,8 +24,8 @@ class VectorDBTester:
     
     def __init__(
         self,
-        db_path: str = "processing/qdrant_local_db",
-        collection_name: str = "paper_embeddings",
+        db_path: str = QDRANT_DB_PATH,
+        collection_name: str = COLLECTION_NAME,
     ):
         """
         Initialize the Vector DB Tester.
@@ -211,13 +212,13 @@ def main():
     )
     parser.add_argument(
         '--db-path',
-        default='processing/qdrant_local_db',
-        help='Path to Qdrant database (default: processing/qdrant_local_db)'
+        default=QDRANT_DB_PATH,
+        help=f'Path to Qdrant database (default: {QDRANT_DB_PATH})'
     )
     parser.add_argument(
         '--collection',
-        default='paper_embeddings',
-        help='Collection name (default: paper_embeddings)'
+        default=COLLECTION_NAME,
+        help=f'Collection name (default: {COLLECTION_NAME})'
     )
     parser.add_argument(
         '--query',

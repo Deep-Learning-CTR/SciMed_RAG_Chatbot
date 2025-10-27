@@ -20,7 +20,7 @@ print("[OK] Download complete")
 print("\n" + "=" * 80)
 print("STEP 3: Extracting and embedding...")
 try:
-    extract_and_embed(papers, "processing/downloaded_papers", "paper_embeddings")
+    extract_and_embed(papers, "processing/downloaded_papers")
     print("[OK] Embedding complete!")
 except Exception as e:
     print(f"[ERROR] during embedding: {e}")

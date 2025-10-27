@@ -122,7 +122,6 @@ def extract_text_from_pdf_simple(pdf_path):
                             "filename": filename,
                             "page": page_num,
                             "file_type": "pdf",
-                            "extraction_method": "pdfplumber_ocr",
                             "has_ocr": bool(page_data['ocr_text']),
                             "has_tables": bool(page_data['tables'])
                         }
@@ -135,8 +134,7 @@ def extract_text_from_pdf_simple(pdf_path):
         for doc in documents:
             doc.metadata.update({
                 'filename': filename,
-                'file_type': 'pdf',
-                'extraction_method': 'pypdf_fallback'
+                'file_type': 'pdf'
             })
 
     return documents
