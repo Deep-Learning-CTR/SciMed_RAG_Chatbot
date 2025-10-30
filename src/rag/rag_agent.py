@@ -13,7 +13,15 @@ from cerebras.cloud.sdk import Cerebras
 
 from embeddings import OllamaEmbeddings, extract_and_embed_conversation
 from vector_db import get_vector_store, set_collection_name
-from utils.conversations import create_new_conversation
+from utils.conversations import (
+    create_new_conversation,
+    list_conversation_ids,
+    get_conversation_path,
+    load_messages,
+    save_messages,
+    load_papers_metadata,
+    save_papers_metadata,
+)
 from utils.downloader import download_papers
 from utils.searcher import search_academic_papers
 
@@ -92,10 +100,54 @@ def reset_conversation() -> None:
     st.session_state.search_summary = None
 
 
+def load_conversation(conv_id: str) -> None:
+    """Load an existing conversation by ID: set collection and restore saved state."""
+    conv_path = get_conversation_path(conv_id)
+    collection_name = f"conv_{conv_id}"
+    set_collection_name(collection_name)
+
+    st.session_state.conversation_id = conv_id
+    st.session_state.conversation_path = conv_path
+    st.session_state.collection_name = collection_name
+    st.session_state.messages = load_messages(conv_path)
+    # Optional: load stored papers metadata to enable chat gating and UI
+    st.session_state.papers_metadata = load_papers_metadata(conv_path)
+    st.session_state.search_summary = None
+
+
 def render_sidebar() -> Dict[str, Any]:
     """Render controls in the sidebar and return the selected options."""
     with st.sidebar:
         st.header("Configuration")
+
+        # Conversation management
+        st.subheader("Conversations")
+        current = st.session_state.get("conversation_id", "-")
+        st.caption(f"Current ID: {current}")
+
+        available_convs = list_conversation_ids()
+        if current in available_convs:
+            try:
+                available_convs.remove(current)
+            except ValueError:
+                pass
+
+        selected_conv = st.selectbox(
+            "Load existing conversation",
+            [""] + available_convs,
+            index=0,
+            help="Pick a previous session to restore its messages and vector DB.",
+        )
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("Start New", use_container_width=True):
+                reset_conversation()
+        with col_b:
+            if selected_conv:
+                if st.button("Load Selected", use_container_width=True):
+                    load_conversation(selected_conv)
+
+        st.divider()
 
         domain_label = st.selectbox(
             "Target collection",
@@ -227,14 +279,24 @@ def run_ingestion(query: str, database: str, max_results: int, collection_name: 
             conversation_id=conversation_id,
         )
 
+    # Persist metadata for later reloads
+    try:
+        save_papers_metadata(st.session_state.conversation_path, st.session_state.papers_metadata)
+    except Exception:
+        pass
+
     st.success("Knowledge base updated! Toggle off 'Search online' to start chatting with the new papers.")
 
 
 def run_chat_flow(model_name: str, retrieval_k: int) -> None:
     """Handle the conversational experience with retrieval augmented responses."""
+    # Allow chatting if either we have papers metadata OR a prior ingestion exists for this conversation
     if not st.session_state.papers_metadata:
-        st.info("Load papers first by enabling 'Search online'.")
-        return
+        # Heuristic: check for tracking file created during downloads
+        tracking_file = os.path.join("processing", f"{st.session_state.conversation_id}")
+        if not os.path.isfile(tracking_file):
+            st.info("Load papers first by enabling 'Search online', or load an existing conversation from the sidebar.")
+            return
 
     for idx, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
@@ -258,6 +320,10 @@ def run_chat_flow(model_name: str, retrieval_k: int) -> None:
         return
 
     st.session_state.messages.append({"role": "user", "content": user_prompt})
+    try:
+        save_messages(st.session_state.conversation_path, st.session_state.messages)
+    except Exception:
+        pass
     with st.chat_message("user"):
         st.markdown(user_prompt)
 
@@ -300,6 +366,8 @@ def run_chat_flow(model_name: str, retrieval_k: int) -> None:
         for msg in st.session_state.messages[:-1]
         if msg["role"] in {"user", "assistant"}
     ]
+    # Keep only the most recent 5 messages for model context
+    history_messages = history_messages[-5:]
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history_messages]
     messages.append(
@@ -328,6 +396,10 @@ def run_chat_flow(model_name: str, retrieval_k: int) -> None:
 
     assistant_record = {"role": "assistant", "content": assistant_text, "chunks": chunk_records}
     st.session_state.messages.append(assistant_record)
+    try:
+        save_messages(st.session_state.conversation_path, st.session_state.messages)
+    except Exception:
+        pass
 
     with st.chat_message("assistant"):
         st.markdown(assistant_text)
