@@ -10,6 +10,7 @@ from PIL import Image
 import pytesseract
 from io import BytesIO
 import warnings
+import logging
 
 from dotenv import load_dotenv
 
@@ -17,6 +18,10 @@ load_dotenv()
 
 # Suppress Camelot image-based page warnings
 warnings.filterwarnings('ignore', message='.*is image-based, camelot only works on text-based pages.*')
+
+# Reduce noisy warnings from pdfminer (used by pdfplumber)
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
+logging.getLogger("pdfminer.pdfinterp").setLevel(logging.ERROR)
 
 # Get Tesseract path from .env
 tesseract_path = os.getenv('TESSERACT_PATH')
